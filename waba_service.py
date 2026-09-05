@@ -307,7 +307,7 @@ def send_class_update(payload: dict):
     Sends WhatsApp notification for upcoming class session.
     Payload:
         phone_number: str
-        student_name: str (default 'Learner')
+        student_name: str (default 'Student')
         trainer_name: str (default 'ChakoraHub Trainer')
         course_name: str (e.g. session title)
         session_time: str (e.g. '10:00 AM - 11:30 AM IST, 26 Aug 2026')
@@ -316,7 +316,7 @@ def send_class_update(payload: dict):
         send_as_text: bool (optional, fallback or direct text message)
     """
     phone_number = str(payload.get("phone_number") or DEFAULT_WHATSAPP_RECIPIENT).strip()
-    student_name = str(payload.get("student_name") or "Learner").strip()
+    student_name = str(payload.get("student_name") or "Student").strip()
     trainer_name = str(payload.get("trainer_name") or "ChakoraHub Trainer").strip()
     course_name  = str(payload.get("course_name")  or "Upcoming Class Session").strip()
     session_time = str(payload.get("session_time") or "Upcoming").strip()
