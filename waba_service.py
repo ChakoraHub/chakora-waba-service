@@ -299,7 +299,113 @@ def send_registration_message(payload: dict):
         "phone_number": recipient,
         "meta_response": resp_json,
     }
-    
+
+
+@app.post("/send-class-update")
+def send_class_update(payload: dict):
+    """
+    Sends WhatsApp notification for upcoming class session.
+    Payload:
+        phone_number: str
+        student_name: str (default 'Student')
+        trainer_name: str (default 'ChakoraHub Trainer')
+        course_name: str (e.g. session title)
+        session_time: str (e.g. '10:00 AM - 11:30 AM IST, 26 Aug 2026')
+        agenda: str (captured from Teams)
+        meeting_link: str (Teams meeting link)
+        send_as_text: bool (optional, fallback or direct text message)
+    """
+    phone_number = str(payload.get("phone_number") or DEFAULT_WHATSAPP_RECIPIENT).strip()
+    student_name = str(payload.get("student_name") or "Student").strip()
+    trainer_name = str(payload.get("trainer_name") or "ChakoraHub Trainer").strip()
+    course_name  = str(payload.get("course_name")  or "Upcoming Class Session").strip()
+    session_time = str(payload.get("session_time") or "Upcoming").strip()
+    agenda       = str(payload.get("agenda")       or "Please join on time.").strip()
+    meeting_link = str(payload.get("meeting_link") or "https://chakorahub.com").strip()
+    send_as_text = bool(payload.get("send_as_text", False))
+
+    force_override = os.getenv("FORCE_TEST_RECIPIENT_ONLY", "").strip()
+    if force_override:
+        print(f"🔒 [WABA SAFETY LOCK] Overriding recipient to test phone: {force_override} (NRM_USERS protected)")
+        phone_number = force_override
+
+    recipient = _normalize_phone_number(phone_number)
+
+    if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
+        raise HTTPException(status_code=500, detail="WhatsApp credentials not configured")
+
+    whatsapp_url = f"https://graph.facebook.com/v23.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    # If sending as plain text or fallback:
+    if send_as_text:
+        formatted_body = (
+            f"📢 *Upcoming Class Update*\n\n"
+            f"Hello {student_name},\n\n"
+            f"👤 *Trainer:* {trainer_name}\n"
+            f"📚 *Session on:* {course_name}\n"
+            f"⏰ *Timings:* {session_time}\n"
+            f"📝 *Agenda:*\n{agenda}\n\n"
+            f"🔗 *Join Teams Meeting:*\n{meeting_link}"
+        )
+        msg_payload = {
+            "messaging_product": "whatsapp",
+            "to": recipient,
+            "type": "text",
+            "text": {
+                "preview_url": True,
+                "body": formatted_body
+            }
+        }
+    else:
+        # Default: Use Meta Approved WhatsApp Template (session_reminder)
+        msg_payload = {
+            "messaging_product": "whatsapp",
+            "to": recipient,
+            "type": "template",
+            "template": {
+                "name": "session_reminder",
+                "language": {"code": "en"},
+                "components": [
+                    {
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": student_name},
+                            {"type": "text", "text": course_name},
+                            {"type": "text", "text": trainer_name},
+                            {"type": "text", "text": session_time},
+                            {"type": "text", "text": meeting_link}
+                        ]
+                    }
+                ]
+            }
+        }
+
+    print(f"Sending WhatsApp session notification to {recipient} ({student_name})...")
+    resp = requests.post(whatsapp_url, headers=headers, json=msg_payload, timeout=30)
+    print("Meta Status:", resp.status_code)
+    print("Meta Response:", resp.text)
+
+    try:
+        resp_json = resp.json()
+    except ValueError:
+        resp_json = {"raw": resp.text}
+
+    if resp.status_code not in (200, 201):
+        raise HTTPException(status_code=500, detail=resp_json)
+
+    return {
+        "status": "success",
+        "phone_number": recipient,
+        "student_name": student_name,
+        "course_name": course_name,
+        "meta_response": resp_json
+    }
+
+
 # ═══════════════════════════════════════════════════════════════
 # ENTRYPOINT
 # ═══════════════════════════════════════════════════════════════
