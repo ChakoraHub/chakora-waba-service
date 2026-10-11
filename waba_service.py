@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from dotenv import load_dotenv
 import requests
 import os
@@ -47,6 +47,8 @@ app = FastAPI(title="ChakoraHub WhatsApp Notification Service")
 
 def _normalize_phone_number(phone_number: str) -> str:
     cleaned = re.sub(r"\D", "", phone_number or "")
+    if cleaned.startswith("0") and len(cleaned) == 11:
+        cleaned = cleaned[1:]
     if cleaned.startswith("91") and len(cleaned) == 12:
         return cleaned
     if len(cleaned) == 10:
@@ -406,9 +408,134 @@ def send_class_update(payload: dict):
     }
 
 
+# =========================================================
+# EXOTEL IVR + WABA INTEGRATION ENDPOINTS
+# =========================================================
+
+async def _extract_ivr_params(request: Request) -> dict:
+    """Helper to extract parameters across GET, form-data, and JSON requests."""
+    if request.method == "GET":
+        return dict(request.query_params)
+    try:
+        form_data = await request.form()
+        return dict(form_data)
+    except Exception:
+        pass
+    try:
+        return await request.json()
+    except Exception:
+        return dict(request.query_params)
+
+
+def _get_ivr_message_text(digits: str) -> str:
+    """Map selected IVR DTMF digits to appropriate WhatsApp template message."""
+    messages = {
+        "1": (
+            "🌟 *Welcome to ChakoraHub!*\n\n"
+            "Thank you for contacting our IVR support. Here are the details you requested:\n\n"
+            "📝 *Course Registration*: https://www.chakorahub.com/registration\n"
+            "📚 *Explore Syllabus & Tracks*: https://www.chakorahub.com/syllabus\n\n"
+            "Need help? Simply reply to this WhatsApp message and our team will assist you!"
+        ),
+        "2": (
+            "🚀 *ChakoraHub Career & Opportunities*\n\n"
+            "Thank you for calling ChakoraHub! Here are the links for careers and internships:\n\n"
+            "💼 *Apply for Open Positions*: https://www.chakorahub.com/apply\n"
+            "🎓 *Internship Program*: https://www.chakorahub.com/internships\n"
+            "🔍 *Track Application Status*: https://www.chakorahub.com/track-application\n\n"
+            "Best regards,\nChakoraHub Careers Team"
+        ),
+        "3": (
+            "🎫 *ChakoraHub Support & Helpdesk*\n\n"
+            "We received your support inquiry via IVR.\n\n"
+            "📌 *Student Support Portal*: https://www.chakorahub.com/tickets/student\n"
+            "📌 *Employee Support Portal*: https://www.chakorahub.com/tickets/employee\n\n"
+            "You can also reply directly with your issue and we will resolve it promptly."
+        )
+    }
+    return messages.get(
+        digits,
+        (
+            "👋 *Hello from ChakoraHub!*\n\n"
+            "Thank you for reaching out to us via our IVR helpline.\n\n"
+            "🌐 *Visit our Website*: https://www.chakorahub.com\n"
+            "📚 *Courses*: https://www.chakorahub.com/syllabus\n"
+            "📝 *Registration*: https://www.chakorahub.com/registration\n\n"
+            "Feel free to reply to this message anytime to chat with an advisor!"
+        )
+    )
+
+
+@app.api_route("/api/ivr/waba", methods=["GET", "POST"])
+@app.api_route("/ivr/whatsapp", methods=["GET", "POST"])
+async def exotel_ivr_waba_handler(request: Request):
+    """
+    Exotel Passthrough Applet Webhook Handler.
+    Receives incoming IVR call event and dispatches automated WhatsApp message to the caller.
+    Supports both HTTP GET (query parameters) and POST (form-data / JSON).
+    """
+    params = await _extract_ivr_params(request)
+
+    call_sid = params.get("CallSid") or params.get("call_sid") or ""
+    caller_phone = (
+        params.get("CallFrom")
+        or params.get("call_from")
+        or params.get("From")
+        or params.get("from")
+        or params.get("caller")
+        or params.get("Caller")
+        or params.get("phone_number")
+        or ""
+    )
+    digits = str(params.get("Digits") or params.get("digits") or "").strip()
+    call_type = params.get("CallType") or params.get("call_type") or "completed"
+
+    print(f"\n[Exotel IVR Webhook] Received call: CallSid={call_sid}, From={caller_phone}, Digits={digits}, CallType={call_type}")
+
+    if not caller_phone:
+        raise HTTPException(status_code=400, detail="Missing required 'From' caller phone number")
+
+    recipient = _normalize_phone_number(caller_phone)
+    message_text = _get_ivr_message_text(digits)
+
+    # Send WhatsApp Message (graceful fallback in dev/test if Meta token unconfigured)
+    whatsapp_status = "sent"
+    meta_response = None
+    try:
+        if WHATSAPP_TOKEN and PHONE_NUMBER_ID:
+            meta_response = _send_whatsapp_text_message(recipient, message_text)
+        else:
+            print(f"[Exotel IVR Webhook] Mock WhatsApp send to {recipient} (Meta credentials not configured locally)")
+            whatsapp_status = "simulated"
+            meta_response = {"mock": True, "recipient": recipient, "message": message_text}
+    except Exception as e:
+        print(f"[Exotel IVR Webhook ERROR] Failed sending WhatsApp: {e}")
+        whatsapp_status = f"error: {str(e)}"
+
+    return {
+        "status": "success",
+        "call_sid": call_sid,
+        "caller": recipient,
+        "digits": digits,
+        "whatsapp_status": whatsapp_status,
+        "meta_response": meta_response
+    }
+
+
+@app.get("/api/ivr/waba/health")
+def ivr_waba_health():
+    """Healthcheck specifically for Exotel IVR webhook readiness."""
+    return {
+        "service": "exotel-ivr-waba",
+        "status": "ready",
+        "whatsapp_configured": bool(WHATSAPP_TOKEN and PHONE_NUMBER_ID)
+    }
+
+
 # ═══════════════════════════════════════════════════════════════
 # ENTRYPOINT
 # ═══════════════════════════════════════════════════════════════
+
 
 if __name__ == "__main__":
     import uvicorn
