@@ -1,0 +1,10 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.git
+.github
+.env
+*.log
+waba-venv/
+ec2_backup/
